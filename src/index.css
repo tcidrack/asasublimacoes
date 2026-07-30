@@ -1,0 +1,50 @@
+@import 'tailwindcss';
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 antialiased;
+  margin: 0;
+}
+
+/* Evita o zoom automatico do iOS ao focar um input (fonte < 16px). */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/*
+ * Impressao da ordem de producao. Tudo marcado com .no-print some,
+ * e o conteudo ocupa a folha inteira sem sombras nem fundo cinza.
+ */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  body {
+    background: white;
+  }
+
+  .print-area {
+    max-width: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  /* Nao quebrar a grade de tamanhos no meio entre duas paginas. */
+  table,
+  .avoid-break {
+    break-inside: avoid;
+  }
+}
