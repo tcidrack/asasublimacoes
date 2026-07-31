@@ -1,5 +1,10 @@
 import { calcularTotais } from './pricing'
-import type { Catalogo, PayloadPedido, RespostaPedido } from '../types'
+import type {
+  Catalogo,
+  PayloadPedido,
+  PedidoConsultado,
+  RespostaPedido,
+} from '../types'
 
 /**
  * Modo demonstração: deixa a interface rodar sem a planilha do Google.
@@ -93,6 +98,25 @@ export const catalogoDemo: Catalogo = {
     { nome: 'Rosa', ordem: 10 },
   ],
 
+  posicoes: [
+    { nome: 'Peito esquerdo', ordem: 1 },
+    { nome: 'Peito direito', ordem: 2 },
+    { nome: 'Centro do peito', ordem: 3 },
+    { nome: 'Costas', ordem: 4 },
+    { nome: 'Manga esquerda', ordem: 5 },
+    { nome: 'Manga direita', ordem: 6 },
+    { nome: 'Gola', ordem: 7 },
+    { nome: 'Barra', ordem: 8 },
+  ],
+
+  prazoMinimoDias: 15,
+
+  // Um bloqueio de exemplo, para dar pra testar a recusa por data sem precisar
+  // cadastrar nada na planilha.
+  datasBloqueadas: [
+    { inicio: '2026-12-24', fim: '2027-01-02', motivo: 'Recesso de fim de ano' },
+  ],
+
   // Matriz parcial de propósito: combinação ausente = a loja não faz.
   // É o que faz o select de tecido filtrar conforme a peça escolhida.
   precos: {
@@ -118,6 +142,9 @@ export const catalogoDemo: Catalogo = {
   nonce: 'demo',
 }
 
+/** Pedidos criados nesta sessão, para a consulta ter o que mostrar no demo. */
+const pedidosDemo: PedidoConsultado[] = []
+
 let ultimoNumero = 0
 
 /**
@@ -136,9 +163,44 @@ export async function enviarPedidoDemo(
   const totais = calcularTotais(catalogoDemo, payload.itens)
   ultimoNumero += 1
 
+  // Guarda em memória para a página de acompanhamento ter o que mostrar sem
+  // planilha. Some ao recarregar, e no demo isso é esperado.
+  pedidosDemo.push({
+    numero: ultimoNumero,
+    data: new Date().toISOString().slice(0, 10),
+    prazo: payload.prazo ?? '',
+    status: 'Aguardando pagamento',
+    artes: payload.artes.map((a) => a.posicao).join(', '),
+    totalCentavos: totais.totalCentavos,
+    entradaCentavos: totais.entradaCentavos,
+    entradaPaga: false,
+    saldoPago: false,
+    faltaPagarCentavos: totais.totalCentavos,
+    itens: payload.itens.map((i) => ({
+      peca: i.peca,
+      tecido: i.tecido,
+      cor: i.cor,
+      genero: i.genero,
+      tamanho: i.tamanho,
+      quantidade: i.quantidade,
+    })),
+    telefone: payload.telefone.replace(/\D/g, ''),
+  } as PedidoConsultado & { telefone: string })
+
   return {
     numero: ultimoNumero,
     totalCentavos: totais.totalCentavos,
     entradaCentavos: totais.entradaCentavos,
   }
+}
+
+export async function consultarPedidosDemo(
+  digitos: string,
+): Promise<PedidoConsultado[]> {
+  await new Promise((resolver) => setTimeout(resolver, 400))
+
+  return pedidosDemo
+    .filter((p) => (p as PedidoConsultado & { telefone?: string }).telefone === digitos)
+    .slice()
+    .sort((a, b) => b.numero - a.numero)
 }

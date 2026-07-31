@@ -112,8 +112,15 @@ function carregarPedido(numero) {
     telefone: v[COL_PEDIDO.TELEFONE - 1],
     empresa: v[COL_PEDIDO.EMPRESA - 1],
     prazo: v[COL_PEDIDO.PRAZO - 1],
-    logo: v[COL_PEDIDO.LOGO - 1],
-    posicao: v[COL_PEDIDO.POSICAO - 1],
+    artes: lerLinhas(aba(ABAS.ARTES))
+      .filter(function (l) { return Number(l[COL_ARTE.NUMERO_PEDIDO - 1]) === numero; })
+      .map(function (l) {
+        return {
+          posicao: String(l[COL_ARTE.POSICAO - 1] || ''),
+          arquivo: String(l[COL_ARTE.ARQUIVO - 1] || ''),
+          observacao: String(l[COL_ARTE.OBSERVACAO - 1] || ''),
+        };
+      }),
     observacoes: v[COL_PEDIDO.OBSERVACOES - 1],
     total: Number(v[COL_PEDIDO.TOTAL - 1]) || 0,
     entrada: Number(v[COL_PEDIDO.ENTRADA - 1]) || 0,
@@ -221,9 +228,23 @@ function gerarOrdemDeProducao() {
   campo('Status', pedido.status);
   linha++;
 
-  titulo('PERSONALIZAÇÃO');
-  campo('Posição da estampa', pedido.posicao);
-  campo('Arquivo do logo', pedido.logo);
+  titulo('ARTES A APLICAR');
+  if (pedido.artes.length > 0) {
+    sheet.getRange(linha, 1, 1, 5)
+      .setValues([['Posição', 'Arquivo', '', '', 'Observação']])
+      .setFontWeight('bold').setBackground('#e2e8f0');
+    linha++;
+
+    pedido.artes.forEach(function (arte) {
+      sheet.getRange(linha, 1).setValue(arte.posicao).setFontWeight('bold');
+      sheet.getRange(linha, 2, 1, 3).merge().setValue(arte.arquivo || '—');
+      sheet.getRange(linha, 5).setValue(arte.observacao || '—');
+      linha++;
+    });
+  } else {
+    sheet.getRange(linha, 1, 1, 5).merge().setValue('Sem arte enviada.');
+    linha++;
+  }
   campo('Observações', pedido.observacoes);
   linha++;
 

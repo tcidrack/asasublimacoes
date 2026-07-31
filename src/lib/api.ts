@@ -1,5 +1,16 @@
-import { MODO_DEMO, catalogoDemo, enviarPedidoDemo } from './demo'
-import type { Catalogo, LogoEnviado, PayloadPedido, RespostaPedido } from '../types'
+import {
+  MODO_DEMO,
+  catalogoDemo,
+  consultarPedidosDemo,
+  enviarPedidoDemo,
+} from './demo'
+import type {
+  Catalogo,
+  LogoEnviado,
+  PayloadPedido,
+  PedidoConsultado,
+  RespostaPedido,
+} from '../types'
 
 const URL_WEBAPP = import.meta.env.VITE_APPS_SCRIPT_URL
 
@@ -107,6 +118,7 @@ function exigirCatalogoCompleto(dados: Catalogo): Catalogo {
     ['tecidos', dados.tecidos],
     ['tamanhos', dados.tamanhos],
     ['cores', dados.cores],
+    ['posições de estampa', dados.posicoes],
   ]
 
   const faltando = listas
@@ -116,11 +128,47 @@ function exigirCatalogoCompleto(dados: Catalogo): Catalogo {
   if (faltando.length > 0) {
     throw new Error(
       `O catálogo veio sem: ${faltando.join(', ')}. ` +
-        'Atualize os arquivos .gs na planilha, rode configurarPlanilha e ' +
-        'publique uma nova versão da implantação.',
+        'A planilha está com uma versão antiga do código: atualize os ' +
+        'arquivos .gs, rode configurarPlanilha e publique uma NOVA VERSÃO ' +
+        'da implantação (pelo lápis, trocando o campo "Versão").',
     )
   }
+
+  // Sem isto, `datasBloqueadas` indefinido só quebraria mais tarde, dentro da
+  // validação do prazo -- longe da causa.
+  if (!Array.isArray(dados.datasBloqueadas)) {
+    dados.datasBloqueadas = []
+  }
+
   return dados
+}
+
+/**
+ * Busca os pedidos de um telefone.
+ *
+ * Telefone, e não número do pedido: a numeração recomeça quando o dono limpa
+ * os pedidos já entregues da planilha, então ela não identifica ninguém ao
+ * longo do tempo.
+ */
+export async function consultarPedidos(telefone: string): Promise<PedidoConsultado[]> {
+  const digitos = telefone.replace(/\D/g, '')
+
+  if (digitos.length < 10) {
+    throw new Error('Informe o telefone completo, com DDD.')
+  }
+
+  if (MODO_DEMO) return consultarPedidosDemo(digitos)
+
+  try {
+    const resposta = await fetch(
+      `${exigirUrl()}?action=consulta&telefone=${encodeURIComponent(digitos)}`,
+      { method: 'GET', redirect: 'follow' },
+    )
+    const dados = await lerJson<{ pedidos: PedidoConsultado[] }>(resposta)
+    return dados.pedidos ?? []
+  } catch (causa) {
+    throw erroDeRede(causa)
+  }
 }
 
 export async function enviarPedido(payload: PayloadPedido): Promise<RespostaPedido> {

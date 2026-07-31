@@ -29,6 +29,18 @@ export interface Cor {
   ordem: number
 }
 
+export interface Posicao {
+  nome: string
+  ordem: number
+}
+
+/** Período em que a loja não entrega. Datas em "aaaa-mm-dd". */
+export interface DataBloqueada {
+  inicio: string
+  fim: string
+  motivo: string
+}
+
 /** precos['Camiseta']['Dry-fit'] = 4500 (centavos). Ausente = não oferecemos. */
 export type MatrizPrecos = Record<string, Record<string, number>>
 
@@ -37,7 +49,11 @@ export interface Catalogo {
   tecidos: Tecido[]
   tamanhos: Tamanho[]
   cores: Cor[]
+  posicoes: Posicao[]
   precos: MatrizPrecos
+  /** Dias que a loja precisa para produzir. Entrega antes disso é recusada. */
+  prazoMinimoDias: number
+  datasBloqueadas: DataBloqueada[]
   /** Uso único, exigido no envio. Vem junto do catálogo. */
   nonce: string
 }
@@ -58,14 +74,19 @@ export interface LogoEnviado {
   dadosBase64: string
 }
 
+export interface ArteEnviada {
+  posicao: string
+  arquivo: LogoEnviado
+  observacao?: string
+}
+
 export interface PayloadPedido {
   cliente: string
   telefone: string
   empresa?: string
   prazo?: string
-  posicaoEstampa?: string
   observacoes?: string
-  logo?: LogoEnviado
+  artes: ArteEnviada[]
   itens: LinhaPedido[]
   nonce: string
   /** Honeypot: fica escondido no formulário e precisa chegar vazio. */
@@ -76,4 +97,26 @@ export interface RespostaPedido {
   numero: number
   totalCentavos: number
   entradaCentavos: number
+}
+
+/** Um pedido como o próprio cliente vê na página de acompanhamento. */
+export interface PedidoConsultado {
+  numero: number
+  data: string
+  prazo: string
+  status: string
+  artes: string
+  totalCentavos: number
+  entradaCentavos: number
+  entradaPaga: boolean
+  saldoPago: boolean
+  faltaPagarCentavos: number
+  itens: Array<{
+    peca: string
+    tecido: string
+    cor: string
+    genero: string
+    tamanho: string
+    quantidade: number
+  }>
 }

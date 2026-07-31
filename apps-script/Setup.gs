@@ -16,17 +16,21 @@ function configurarPlanilha() {
   configurarAbaTecidos();
   configurarAbaTamanhos();
   configurarAbaCores();
+  configurarAbaPosicoes();
   configurarAbaPrecos();
+  configurarAbaAgenda();
   configurarAbaPedidos();
   configurarAbaItens();
+  configurarAbaArtes();
   configurarAbaGrade();
   configurarAbaOrdemProducao();
 
   // Deixa as abas na ordem em que o dono usa: primeiro o dia a dia, depois
   // o catalogo que quase nunca muda.
   const ordem = [
-    ABAS.PEDIDOS, ABAS.ITENS, ABAS.GRADE, ABAS.ORDEM,
-    ABAS.PRECOS, ABAS.PECAS, ABAS.TECIDOS, ABAS.TAMANHOS, ABAS.CORES,
+    ABAS.PEDIDOS, ABAS.ITENS, ABAS.ARTES, ABAS.GRADE, ABAS.ORDEM,
+    ABAS.AGENDA, ABAS.PRECOS,
+    ABAS.PECAS, ABAS.TECIDOS, ABAS.TAMANHOS, ABAS.CORES, ABAS.POSICOES,
   ];
   ordem.forEach(function (nome, i) {
     const sheet = ss.getSheetByName(nome);
@@ -225,6 +229,100 @@ function configurarAbaCores() {
   sheet.setColumnWidth(3, 70);
 }
 
+function configurarAbaPosicoes() {
+  const sheet = obterOuCriarAba(ABAS.POSICOES);
+  aplicarCabecalho(sheet, ['Posição', 'Ativo', 'Ordem']);
+
+  if (abaVazia(sheet)) {
+    sheet.getRange(2, 1, 8, 3).setValues([
+      ['Peito esquerdo', true, 1],
+      ['Peito direito', true, 2],
+      ['Centro do peito', true, 3],
+      ['Costas', true, 4],
+      ['Manga esquerda', true, 5],
+      ['Manga direita', true, 6],
+      ['Gola', true, 7],
+      ['Barra', true, 8],
+    ]);
+  }
+
+  aplicarCheckboxes(sheet, 2);
+  sheet.setColumnWidth(1, 200);
+  sheet.setColumnWidth(2, 70);
+  sheet.setColumnWidth(3, 70);
+}
+
+/**
+ * Agenda: quanto tempo a loja precisa e quando ela nao consegue atender.
+ *
+ * Sem isso o cliente marca entrega pra daqui a tres dias em algo que leva tres
+ * semanas, e o problema so aparece na conversa, depois do pedido feito.
+ */
+function configurarAbaAgenda() {
+  const sheet = obterOuCriarAba(ABAS.AGENDA);
+
+  const jaConfigurada = String(sheet.getRange('A1').getValue()).indexOf('Prazo mínimo') === 0;
+
+  sheet.getRange('A1')
+    .setValue('Prazo mínimo (dias)')
+    .setFontWeight('bold');
+
+  if (!jaConfigurada) sheet.getRange('B1').setValue(15);
+
+  sheet.getRange('B1')
+    .setBackground('#fef9c3')
+    .setBorder(true, true, true, true, false, false)
+    .setFontWeight('bold')
+    .setNumberFormat('0')
+    .setHorizontalAlignment('center');
+
+  sheet.getRange('C1')
+    .setValue('O cliente não consegue escolher entrega antes disso.')
+    .setFontStyle('italic')
+    .setFontColor('#64748b');
+
+  sheet.getRange('A3:C3')
+    .setValues([['Bloqueado de', 'Até', 'Motivo']])
+    .setFontWeight('bold')
+    .setBackground('#1e293b')
+    .setFontColor('#ffffff');
+
+  const linhas = Math.max(sheet.getMaxRows() - 3, 1);
+  sheet.getRange(4, 1, linhas, 2).setNumberFormat(FORMATO_DATA);
+
+  if (sheet.getLastRow() < 4) {
+    sheet.getRange('C4')
+      .setValue('Ex: 24/12/2026 a 02/01/2027 — Recesso de fim de ano')
+      .setFontStyle('italic')
+      .setFontColor('#94a3b8');
+  }
+
+  sheet.setColumnWidth(1, 130);
+  sheet.setColumnWidth(2, 130);
+  sheet.setColumnWidth(3, 420);
+  sheet.setFrozenRows(3);
+}
+
+function configurarAbaArtes() {
+  const sheet = obterOuCriarAba(ABAS.ARTES);
+  aplicarCabecalho(sheet, CABECALHO_ARTES);
+
+  const linhas = Math.max(sheet.getMaxRows() - 1, 1);
+  sheet.getRange(2, COL_ARTE.NUMERO_PEDIDO, linhas, 1)
+    .setNumberFormat(FORMATO_NUMERO_PEDIDO);
+
+  sheet.setColumnWidth(COL_ARTE.NUMERO_PEDIDO, 110);
+  sheet.setColumnWidth(COL_ARTE.POSICAO, 170);
+  sheet.setColumnWidth(COL_ARTE.ARQUIVO, 320);
+  sheet.setColumnWidth(COL_ARTE.OBSERVACAO, 280);
+
+  protegerComAviso(
+    sheet,
+    sheet.getRange(2, 1, linhas, CABECALHO_ARTES.length),
+    'Artes — gravadas pelo formulário'
+  );
+}
+
 /**
  * A matriz de precos: linhas = pecas, colunas = tecidos.
  * Celula vazia significa "nao oferecemos essa combinacao" -- e ela nem
@@ -356,8 +454,8 @@ function configurarAbaPedidos() {
   aplicarCoresDeStatus(sheet, linhas);
 
   const largura = {
-    1: 55, 2: 130, 3: 200, 4: 130, 5: 170, 6: 110, 7: 90, 8: 150,
-    9: 260, 10: 100, 11: 110, 12: 120, 13: 160, 14: 130, 15: 130,
+    1: 55, 2: 130, 3: 200, 4: 130, 5: 170, 6: 110, 7: 200, 8: 260,
+    9: 100, 10: 110, 11: 120, 12: 160, 13: 130, 14: 130,
   };
   Object.keys(largura).forEach(function (col) {
     sheet.setColumnWidth(Number(col), largura[col]);
@@ -482,12 +580,18 @@ function configurarAbaGrade() {
 
   const faixa = function (letra) { return 'Itens!$' + letra + ':$' + letra; };
 
+  // A faixa do VLOOKUP tambem sai das constantes. Estava escrita como $A:$O
+  // (15 colunas); ao remover Logo e Posição a aba passou a ter 14, e o
+  // VLOOKUP ficaria procurando numa faixa maior que a tabela.
+  const faixaPedidos =
+    'Pedidos!$A:$' + letraDaColuna(CABECALHO_PEDIDOS.length);
+
   sheet.getRange('B2').setFormula(
-    '=IFERROR(VLOOKUP($B$1' + s + 'Pedidos!$A:$O' + s +
+    '=IFERROR(VLOOKUP($B$1' + s + faixaPedidos + s +
     COL_PEDIDO.CLIENTE + s + 'FALSE)' + s + '"")'
   );
   sheet.getRange('B3').setFormula(
-    '=IFERROR(VLOOKUP($B$1' + s + 'Pedidos!$A:$O' + s +
+    '=IFERROR(VLOOKUP($B$1' + s + faixaPedidos + s +
     COL_PEDIDO.STATUS + s + 'FALSE)' + s + '"")'
   );
 

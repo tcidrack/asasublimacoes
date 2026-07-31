@@ -188,6 +188,7 @@ const pecas = dados.pecas ?? []
 const tecidos = dados.tecidos ?? []
 const tamanhos = dados.tamanhos ?? []
 const cores = dados.cores ?? []
+const posicoes = dados.posicoes ?? []
 const precos = dados.precos ?? {}
 
 const combinacoes = Object.values(precos).reduce(
@@ -223,6 +224,35 @@ if (cores.length === 0) {
   )
 }
 ok(`${cores.length} cores`, cores.map((c) => c.nome).join(', '))
+
+// Posições e prazo chegaram depois das cores. Se a planilha ficou com uma
+// versão intermediária do código, tudo acima passa e só isto denuncia.
+if (posicoes.length === 0) {
+  falhar(
+    'O catálogo veio sem as posições de estampa',
+    'A implantação está servindo uma versão antiga do código.',
+    '',
+    `1. Confirme que os 4 arquivos ${CINZA}.gs${RESET} foram colados E SALVOS (Ctrl+S)`,
+    `2. Rode ${NEGRITO}configurarPlanilha${RESET} (cria as abas Posições, Artes e Agenda)`,
+    '3. Implantar > Gerenciar implantações > lápis',
+    `   ${NEGRITO}e troque o campo "Versão" para "Nova versão"${RESET} antes de Implantar`,
+    '',
+    `${CINZA}O passo 3 é o que mais escapa: o seletor vem preenchido com a`,
+    `versão atual, e publicar sem trocá-lo republica o mesmo código.${RESET}`,
+  )
+}
+ok(`${posicoes.length} posições de estampa`, posicoes.map((p) => p.nome).join(', '))
+
+if (typeof dados.prazoMinimoDias !== 'number') {
+  falhar(
+    'O catálogo veio sem o prazo mínimo',
+    'Falta a aba Agenda. Rode configurarPlanilha e publique uma nova versão.',
+  )
+}
+ok(
+  `prazo mínimo de ${dados.prazoMinimoDias} dias`,
+  `${(dados.datasBloqueadas ?? []).length} período(s) bloqueado(s)`,
+)
 
 if (combinacoes === 0) {
   falhar(

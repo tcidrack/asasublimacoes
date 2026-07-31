@@ -197,6 +197,12 @@ export function PedidoEnviado({ resposta, onNovoPedido }: PedidoEnviadoProps) {
             Falar no WhatsApp
           </a>
         )}
+        <a
+          href="/acompanhar"
+          className="flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 text-center font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+        >
+          Acompanhar meu pedido
+        </a>
         <button
           type="button"
           onClick={onNovoPedido}

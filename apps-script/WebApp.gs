@@ -33,6 +33,11 @@ function doGet(e) {
       return respostaJson(catalogo);
     }
 
+    if (acao === 'consulta') {
+      const telefone = (e.parameter && e.parameter.telefone) || '';
+      return respostaJson({ ok: true, pedidos: consultarPedidosPorTelefone(telefone) });
+    }
+
     return respostaJson({
       ok: true,
       mensagem: 'Web app do sistema de pedidos está no ar. Use ?action=catalogo.',
@@ -154,27 +159,193 @@ function registrarPedido(payload) {
   }, 0);
   const entradaCentavos = metadeArredondadaPraCima(totalCentavos);
 
-  const linkLogo = payload.logo ? salvarLogoNoDrive(payload.logo, nome) : '';
+  // O prazo e conferido AQUI, e nao so no calendario do site. O `min` do
+  // campo de data e conveniencia pro cliente; sem esta checagem, quem mexer
+  // na requisicao registra pedido pra uma data que a loja nao atende -- que e
+  // exatamente o problema que este recurso existe pra evitar.
+  const prazo = validarPrazo(payload.prazo, catalogo);
+
+  const artes = validarArtes(payload.artes, catalogo, nome);
 
   const pedido = {
     cliente: nome,
     telefone: telefone,
     empresa: textoSeguro(payload.empresa, 120),
-    prazo: dataSegura(payload.prazo),
-    logo: linkLogo,
-    posicao: textoSeguro(payload.posicaoEstampa, 80),
+    prazo: prazo,
     observacoes: textoSeguro(payload.observacoes, 2000),
     totalCentavos: totalCentavos,
     entradaCentavos: entradaCentavos,
   };
 
-  const numero = gravarComLock(pedido, itens);
+  const numero = gravarComLock(pedido, itens, artes);
 
   return {
     numero: numero,
     totalCentavos: totalCentavos,
     entradaCentavos: entradaCentavos,
   };
+}
+
+// ---------------------------------------------------------------------------
+//  Consulta do cliente
+// ---------------------------------------------------------------------------
+
+/**
+ * Devolve os pedidos de UM telefone.
+ *
+ * A busca e por telefone, e nao por numero do pedido, por dois motivos:
+ *
+ * 1. O numero nao e estavel no tempo. Quando o dono limpa da planilha os
+ *    pedidos ja entregues, a numeracao volta a comecar do 0001.
+ * 2. Privacidade. Numero sequencial pode ser varrido de 1 a 9999 por qualquer
+ *    um, expondo nome, telefone e valor de toda a carteira da loja. Telefone
+ *    exige que quem consulta ja conheca o cliente.
+ *
+ * So vao daqui os campos que o proprio cliente ja sabe. Nada de outro cliente
+ * sai nesta resposta.
+ */
+function consultarPedidosPorTelefone(telefone) {
+  const procurado = somenteDigitos(telefone);
+
+  // Menos que isso e busca ampla demais, e passaria a valer a pena varrer.
+  if (procurado.length < 10) {
+    throw new Error('Informe o telefone completo, com DDD.');
+  }
+
+  const linhas = lerLinhas(aba(ABAS.PEDIDOS));
+  const meus = linhas.filter(function (l) {
+    return somenteDigitos(l[COL_PEDIDO.TELEFONE - 1]) === procurado;
+  });
+
+  if (meus.length === 0) return [];
+
+  const numeros = {};
+  meus.forEach(function (l) { numeros[Number(l[COL_PEDIDO.NUMERO - 1])] = true; });
+
+  const itensPorPedido = {};
+  lerLinhas(aba(ABAS.ITENS)).forEach(function (l) {
+    const n = Number(l[COL_ITEM.NUMERO_PEDIDO - 1]);
+    if (!numeros[n]) return;
+    if (!itensPorPedido[n]) itensPorPedido[n] = [];
+    itensPorPedido[n].push({
+      peca: String(l[COL_ITEM.PECA - 1] || ''),
+      tecido: String(l[COL_ITEM.TECIDO - 1] || ''),
+      cor: String(l[COL_ITEM.COR - 1] || ''),
+      genero: String(l[COL_ITEM.GENERO - 1] || ''),
+      tamanho: String(l[COL_ITEM.TAMANHO - 1] || ''),
+      quantidade: Number(l[COL_ITEM.QUANTIDADE - 1]) || 0,
+    });
+  });
+
+  return meus
+    .map(function (l) {
+      const total = reaisParaCentavos(l[COL_PEDIDO.TOTAL - 1]);
+      const entrada = reaisParaCentavos(l[COL_PEDIDO.ENTRADA - 1]);
+      const entradaPaga = !!l[COL_PEDIDO.ENTRADA_PAGA_EM - 1];
+      const saldoPago = !!l[COL_PEDIDO.SALDO_PAGO_EM - 1];
+
+      const numero = Number(l[COL_PEDIDO.NUMERO - 1]);
+      return {
+        numero: numero,
+        data: paraDataISO(l[COL_PEDIDO.DATA - 1]),
+        prazo: paraDataISO(l[COL_PEDIDO.PRAZO - 1]),
+        status: String(l[COL_PEDIDO.STATUS - 1] || ''),
+        artes: String(l[COL_PEDIDO.ARTES - 1] || ''),
+        totalCentavos: total,
+        entradaCentavos: entrada,
+        entradaPaga: entradaPaga,
+        saldoPago: saldoPago,
+        // Recalculado aqui: a coluna Saldo e formula, e formula chega como
+        // valor calculado, mas se a planilha ainda nao recalculou viria zero.
+        faltaPagarCentavos: saldoPago ? 0 : (entradaPaga ? total - entrada : total),
+        itens: itensPorPedido[numero] || [],
+      };
+    })
+    .sort(function (a, b) { return b.numero - a.numero; });
+}
+
+const MAX_ARTES_POR_PEDIDO = 10;
+
+/**
+ * Confere se a data de entrega cabe na agenda da loja.
+ *
+ * Devolve a data pronta pra gravar, ou '' se o cliente nao pediu prazo --
+ * prazo continua opcional.
+ */
+function validarPrazo(valor, catalogo) {
+  const data = dataSegura(valor);
+  if (!data) return '';
+
+  const iso = Utilities.formatDate(data, 'America/Sao_Paulo', 'yyyy-MM-dd');
+
+  const minimo = new Date();
+  minimo.setHours(0, 0, 0, 0);
+  minimo.setDate(minimo.getDate() + (catalogo.prazoMinimoDias || 0));
+  const minimoIso = Utilities.formatDate(minimo, 'America/Sao_Paulo', 'yyyy-MM-dd');
+
+  // Comparar as strings ISO evita erro de fuso: as duas ja estao no mesmo
+  // formato e no mesmo fuso.
+  if (iso < minimoIso) {
+    throw new Error(
+      'A loja precisa de ' + catalogo.prazoMinimoDias +
+      ' dias para produzir. A entrega mais próxima é ' + formatarDataBR(minimoIso) + '.'
+    );
+  }
+
+  const bloqueios = catalogo.datasBloqueadas || [];
+  for (let i = 0; i < bloqueios.length; i++) {
+    const b = bloqueios[i];
+    if (iso >= b.inicio && iso <= b.fim) {
+      throw new Error(
+        'A loja não entrega em ' + formatarDataBR(iso) +
+        (b.motivo ? ' (' + b.motivo + ')' : '') + '. Escolha outra data.'
+      );
+    }
+  }
+
+  return data;
+}
+
+/** "aaaa-mm-dd" -> "dd/mm/aaaa", so pra mensagem de erro ficar legivel. */
+function formatarDataBR(iso) {
+  const p = String(iso).split('-');
+  return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : String(iso);
+}
+
+/**
+ * Valida as artes e sobe os arquivos pro Drive.
+ *
+ * Uma camisa pode ter estampa no peito, nas costas e na manga -- por isso e
+ * uma lista, e nao um arquivo so.
+ */
+function validarArtes(artesRecebidas, catalogo, nomeCliente) {
+  if (!artesRecebidas) return [];
+  if (!Array.isArray(artesRecebidas)) throw new Error('Artes em formato inválido.');
+
+  if (artesRecebidas.length > MAX_ARTES_POR_PEDIDO) {
+    throw new Error('No máximo ' + MAX_ARTES_POR_PEDIDO + ' artes por pedido.');
+  }
+
+  return artesRecebidas.map(function (arte, indice) {
+    const onde = 'Arte ' + (indice + 1) + ': ';
+    if (!arte || typeof arte !== 'object') throw new Error(onde + 'dados inválidos.');
+
+    const posicao = String(arte.posicao || '').trim();
+    const posicaoValida = catalogo.posicoes.some(function (p) { return p.nome === posicao; });
+    if (!posicaoValida) {
+      throw new Error(onde + 'posição "' + posicao + '" não está disponível.');
+    }
+
+    if (!arte.arquivo || !arte.arquivo.dadosBase64) {
+      throw new Error(onde + 'envie o arquivo da arte.');
+    }
+
+    return {
+      posicao: posicao,
+      arquivo: salvarLogoNoDrive(arte.arquivo, nomeCliente + ' - ' + posicao),
+      observacao: textoSeguro(arte.observacao, 200),
+    };
+  });
 }
 
 /**
@@ -247,7 +418,7 @@ function dataSegura(valor) {
  * Sem o lock, dois clientes enviando no mesmo segundo leriam o mesmo "ultimo
  * numero" e o segundo sobrescreveria o primeiro.
  */
-function gravarComLock(pedido, itens) {
+function gravarComLock(pedido, itens, artes) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(30000)) {
     throw new Error('Sistema ocupado, tente novamente em alguns segundos.');
@@ -256,6 +427,7 @@ function gravarComLock(pedido, itens) {
   try {
     const abaPedidos = aba(ABAS.PEDIDOS);
     const abaItens = aba(ABAS.ITENS);
+    const abaArtes = aba(ABAS.ARTES);
 
     const numero = proximoNumeroDePedido(abaPedidos);
     const linha = abaPedidos.getLastRow() + 1;
@@ -267,8 +439,11 @@ function gravarComLock(pedido, itens) {
     valores[COL_PEDIDO.TELEFONE - 1] = pedido.telefone;
     valores[COL_PEDIDO.EMPRESA - 1] = pedido.empresa;
     valores[COL_PEDIDO.PRAZO - 1] = pedido.prazo;
-    valores[COL_PEDIDO.LOGO - 1] = pedido.logo;
-    valores[COL_PEDIDO.POSICAO - 1] = pedido.posicao;
+    // Resumo legivel na linha do pedido; o detalhe de cada arte, com link do
+    // arquivo, fica na aba Artes.
+    valores[COL_PEDIDO.ARTES - 1] = artes.map(function (a) {
+      return a.posicao;
+    }).join(', ');
     valores[COL_PEDIDO.OBSERVACOES - 1] = pedido.observacoes;
     valores[COL_PEDIDO.TOTAL - 1] = centavosParaReais(pedido.totalCentavos);
     valores[COL_PEDIDO.ENTRADA - 1] = centavosParaReais(pedido.entradaCentavos);
@@ -302,6 +477,21 @@ function gravarComLock(pedido, itens) {
     abaItens
       .getRange(abaItens.getLastRow() + 1, 1, linhasItens.length, CABECALHO_ITENS.length)
       .setValues(linhasItens);
+
+    if (artes.length > 0) {
+      const linhasArtes = artes.map(function (arte) {
+        const l = [];
+        l[COL_ARTE.NUMERO_PEDIDO - 1] = numero;
+        l[COL_ARTE.POSICAO - 1] = arte.posicao;
+        l[COL_ARTE.ARQUIVO - 1] = arte.arquivo;
+        l[COL_ARTE.OBSERVACAO - 1] = arte.observacao;
+        return l;
+      });
+
+      abaArtes
+        .getRange(abaArtes.getLastRow() + 1, 1, linhasArtes.length, CABECALHO_ARTES.length)
+        .setValues(linhasArtes);
+    }
 
     SpreadsheetApp.flush();
     return numero;

@@ -1,27 +1,32 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useFieldArray, useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 
 import { Campo, classeInput, classeInputComErro } from '../components/Campo'
 import { LinhaItem } from '../components/LinhaItem'
 import type { ErrosLinha } from '../components/LinhaItem'
+import { LinhaArte } from '../components/LinhaArte'
 import { ResumoValores } from '../components/ResumoValores'
 import { enviarPedido, lerArquivoComoBase64 } from '../lib/api'
 import { calcularTotais } from '../lib/pricing'
 import { formatarTelefone } from '../lib/format'
-import { LINHA_VAZIA, VALORES_INICIAIS, pedidoSchema } from '../lib/schema'
-import type { FormularioPedido } from '../lib/schema'
-import type { Catalogo, Genero, LogoEnviado, RespostaPedido } from '../types'
+import { primeiraDataPossivel } from '../lib/prazo'
+import {
+  LINHA_VAZIA,
+  VALORES_INICIAIS,
+  criarArteVazia,
+  criarPedidoSchema,
+} from '../lib/schema'
+import {
+  lerRascunho,
+  limparRascunho,
+  rascunhoTemConteudo,
+  salvarRascunho,
+} from '../lib/rascunho'
+import type { ArteLocal, FormularioPedido } from '../lib/schema'
+import type { ArteEnviada, Catalogo, Genero, RespostaPedido } from '../types'
 
-const POSICOES_ESTAMPA = [
-  'Peito esquerdo',
-  'Peito direito',
-  'Centro do peito',
-  'Costas',
-  'Manga esquerda',
-  'Manga direita',
-  'Peito + costas',
-]
+const ESPERA_PARA_SALVAR_MS = 500
 
 interface NovoPedidoProps {
   catalogo: Catalogo
@@ -29,61 +34,139 @@ interface NovoPedidoProps {
 }
 
 export function NovoPedido({ catalogo, onEnviado }: NovoPedidoProps) {
-  const [arquivoLogo, setArquivoLogo] = useState<File | null>(null)
-  const [erroLogo, setErroLogo] = useState<string | null>(null)
-  const [previewLogo, setPreviewLogo] = useState<string | null>(null)
+  const [artes, setArtes] = useState<ArteLocal[]>([])
+  const [errosArtes, setErrosArtes] = useState<Record<string, string>>({})
   const [erroEnvio, setErroEnvio] = useState<string | null>(null)
   const [enviando, setEnviando] = useState(false)
+  const [rascunhoRestaurado, setRascunhoRestaurado] = useState(false)
+
+  /** Enquanto o rascunho não foi lido, não se salva por cima dele. */
+  const prontoParaSalvar = useRef(false)
+
+  // O schema depende da agenda da loja, então é recriado quando o catálogo
+  // muda. Sem o useMemo, um schema novo a cada render remontaria o resolver.
+  const schema = useMemo(
+    () => criarPedidoSchema(catalogo.prazoMinimoDias, catalogo.datasBloqueadas),
+    [catalogo.prazoMinimoDias, catalogo.datasBloqueadas],
+  )
 
   const {
     register,
     control,
     handleSubmit,
     setValue,
+    reset,
     formState: { errors },
   } = useForm<FormularioPedido>({
-    resolver: zodResolver(pedidoSchema),
+    resolver: zodResolver(schema),
     defaultValues: VALORES_INICIAIS,
     mode: 'onBlur',
   })
 
   const { fields, append, remove } = useFieldArray({ control, name: 'itens' })
 
+  // Dois observadores de propósito: `itens` tipado alimenta a interface, e
+  // `valores` (parcial, do formulário inteiro) serve só para salvar o
+  // rascunho — onde campo faltando não é problema.
   const itens = useWatch({ control, name: 'itens' })
+  const valores = useWatch({ control })
   const totais = useMemo(
     () => calcularTotais(catalogo, itens ?? []),
     [catalogo, itens],
   )
 
-  // Preview da imagem. Sem o revoke, cada troca de arquivo vaza um blob.
+  const dataMinima = primeiraDataPossivel(catalogo.prazoMinimoDias)
+
+  // Restaura o pedido em andamento. Roda uma vez, antes de qualquer salvamento.
   useEffect(() => {
-    if (!arquivoLogo || !arquivoLogo.type.startsWith('image/')) {
-      setPreviewLogo(null)
-      return
+    const rascunho = lerRascunho()
+
+    if (rascunho && rascunhoTemConteudo(rascunho)) {
+      reset(rascunho.valores)
+      // Os arquivos não sobrevivem ao localStorage; só posição e observação.
+      setArtes(
+        rascunho.artes.map((a) => ({
+          ...criarArteVazia(),
+          posicao: a.posicao,
+          observacao: a.observacao,
+        })),
+      )
+      setRascunhoRestaurado(true)
     }
-    const url = URL.createObjectURL(arquivoLogo)
-    setPreviewLogo(url)
-    return () => URL.revokeObjectURL(url)
-  }, [arquivoLogo])
 
-  const hoje = new Date().toISOString().slice(0, 10)
+    prontoParaSalvar.current = true
+  }, [reset])
 
-  function aoEscolherLogo(arquivo: File | null) {
-    setErroLogo(null)
-    setArquivoLogo(arquivo)
+  // Salva com atraso: sem isso seria uma escrita no disco por tecla digitada.
+  useEffect(() => {
+    if (!prontoParaSalvar.current || !valores) return
+
+    const timer = setTimeout(() => {
+      salvarRascunho(
+        valores as FormularioPedido,
+        artes.map((a) => ({ posicao: a.posicao, observacao: a.observacao })),
+      )
+    }, ESPERA_PARA_SALVAR_MS)
+
+    return () => clearTimeout(timer)
+  }, [valores, artes])
+
+  function descartarRascunho() {
+    limparRascunho()
+    reset(VALORES_INICIAIS)
+    setArtes([])
+    setErrosArtes({})
+    setRascunhoRestaurado(false)
+  }
+
+  /** Artes que voltaram do rascunho e ainda estão sem arquivo. */
+  const artesSemArquivo = rascunhoRestaurado
+    ? artes.filter((a) => a.posicao && !a.arquivo).length
+    : 0
+
+  function mudarArte(id: string, mudancas: Partial<ArteLocal>) {
+    setArtes((atuais) =>
+      atuais.map((a) => (a.id === id ? { ...a, ...mudancas } : a)),
+    )
+    setErrosArtes((atuais) => {
+      const { [id]: _removido, ...resto } = atuais
+      return resto
+    })
+  }
+
+  /** As artes ficam fora do zod (guardam File), então a checagem é aqui. */
+  function validarArtes(): boolean {
+    const encontrados: Record<string, string> = {}
+
+    for (const arte of artes) {
+      if (!arte.posicao) encontrados[arte.id] = 'Escolha a posição da arte.'
+      else if (!arte.arquivo) encontrados[arte.id] = 'Envie o arquivo da arte.'
+    }
+
+    setErrosArtes(encontrados)
+    return Object.keys(encontrados).length === 0
   }
 
   const aoEnviar = handleSubmit(async (valores) => {
+    if (!validarArtes()) return
+
     setErroEnvio(null)
     setEnviando(true)
 
     try {
-      let logo: LogoEnviado | undefined
-      if (arquivoLogo) {
+      const artesEnviadas: ArteEnviada[] = []
+      for (const arte of artes) {
+        if (!arte.arquivo) continue
         try {
-          logo = await lerArquivoComoBase64(arquivoLogo)
+          artesEnviadas.push({
+            posicao: arte.posicao,
+            arquivo: await lerArquivoComoBase64(arte.arquivo),
+            observacao: arte.observacao.trim() || undefined,
+          })
         } catch (causa) {
-          setErroLogo(causa instanceof Error ? causa.message : String(causa))
+          setErrosArtes({
+            [arte.id]: causa instanceof Error ? causa.message : String(causa),
+          })
           setEnviando(false)
           return
         }
@@ -94,9 +177,8 @@ export function NovoPedido({ catalogo, onEnviado }: NovoPedidoProps) {
         telefone: valores.telefone.trim(),
         empresa: valores.empresa.trim() || undefined,
         prazo: valores.prazo || undefined,
-        posicaoEstampa: valores.posicaoEstampa.trim() || undefined,
         observacoes: valores.observacoes.trim() || undefined,
-        logo,
+        artes: artesEnviadas,
         nonce: catalogo.nonce,
         website: valores.website,
         itens: valores.itens.map((linha) => ({
@@ -110,6 +192,9 @@ export function NovoPedido({ catalogo, onEnviado }: NovoPedidoProps) {
         })),
       })
 
+      // Só depois de dar certo. Se limpasse antes e o envio falhasse, o
+      // cliente perderia tudo justamente no pior momento.
+      limparRascunho()
       onEnviado(resposta)
     } catch (causa) {
       setErroEnvio(causa instanceof Error ? causa.message : String(causa))
@@ -121,6 +206,46 @@ export function NovoPedido({ catalogo, onEnviado }: NovoPedidoProps) {
     <form onSubmit={aoEnviar} noValidate className="pb-32 lg:pb-12">
       <div className="mx-auto grid max-w-6xl gap-8 px-4 py-8 lg:grid-cols-[1fr_340px] lg:px-6">
         <div className="min-w-0 space-y-8">
+          {rascunhoRestaurado && (
+            <div className="rounded-xl border border-sky-200 bg-sky-50 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-medium text-sky-900">
+                    Recuperamos seu pedido em andamento
+                  </p>
+                  <p className="mt-1 text-sm text-sky-800">
+                    Continue de onde parou, ou comece do zero.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={descartarRascunho}
+                  className="shrink-0 rounded-lg border border-sky-300 bg-white px-3 py-2 text-sm font-medium text-sky-900 transition hover:bg-sky-100"
+                >
+                  Começar do zero
+                </button>
+              </div>
+
+              {/*
+                O arquivo não sobrevive ao recarregar — File não vira JSON.
+                Sem este aviso o cliente enviaria achando que a arte foi junto,
+                e o dono receberia pedido sem arte.
+              */}
+              {artesSemArquivo > 0 && (
+                <p className="mt-3 rounded-lg bg-amber-100 p-3 text-sm text-amber-900">
+                  <strong>
+                    {artesSemArquivo === 1
+                      ? 'Reenvie o arquivo de 1 arte'
+                      : `Reenvie os arquivos de ${artesSemArquivo} artes`}
+                    .
+                  </strong>{' '}
+                  As posições foram guardadas, mas os arquivos não ficam salvos
+                  no navegador.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* ---------------------------------------------------------- */}
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="text-lg font-semibold text-slate-900">Seus dados</h2>
@@ -236,90 +361,74 @@ export function NovoPedido({ catalogo, onEnviado }: NovoPedidoProps) {
           </section>
 
           {/* ---------------------------------------------------------- */}
+          <section>
+            <div className="mb-4">
+              <h2 className="text-lg font-semibold text-slate-900">
+                Artes a estampar
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Uma arte para cada lugar da peça. Se a camisa leva estampa no
+                peito e nas costas, adicione duas.
+              </p>
+            </div>
+
+            {artes.length > 0 && (
+              <ul className="space-y-4">
+                {artes.map((arte, indice) => (
+                  <LinhaArte
+                    key={arte.id}
+                    indice={indice}
+                    arte={arte}
+                    posicoes={catalogo.posicoes}
+                    posicoesOcupadas={artes.map((a) => a.posicao).filter(Boolean)}
+                    erro={errosArtes[arte.id]}
+                    podeRemover
+                    onMudar={(mudancas) => mudarArte(arte.id, mudancas)}
+                    onRemover={() =>
+                      setArtes((atuais) => atuais.filter((a) => a.id !== arte.id))
+                    }
+                  />
+                ))}
+              </ul>
+            )}
+
+            {artes.length < catalogo.posicoes.length && (
+              <button
+                type="button"
+                onClick={() => setArtes((atuais) => [...atuais, criarArteVazia()])}
+                className="mt-4 w-full rounded-xl border-2 border-dashed border-slate-300 px-4 py-3 text-sm font-medium text-slate-600 transition hover:border-slate-900 hover:text-slate-900"
+              >
+                {artes.length === 0 ? '+ Adicionar arte' : '+ Adicionar outra arte'}
+              </button>
+            )}
+          </section>
+
+          {/* ---------------------------------------------------------- */}
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-900">Personalização</h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Envie a arte e diga onde ela deve ficar.
-            </p>
+            <h2 className="text-lg font-semibold text-slate-900">
+              Prazo e observações
+            </h2>
 
             <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Campo
-                label="Logo ou arte"
-                htmlFor="logo"
-                erro={erroLogo ?? undefined}
-                dica="PNG, JPG, WEBP ou PDF, até 5 MB"
-              >
-                <input
-                  id="logo"
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,application/pdf"
-                  onChange={(evento) => aoEscolherLogo(evento.target.files?.[0] ?? null)}
-                  className="w-full cursor-pointer rounded-lg border border-slate-300 bg-white text-sm text-slate-600 shadow-sm file:mr-3 file:cursor-pointer file:border-0 file:bg-slate-100 file:px-4 file:py-2 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
-                />
-
-                {arquivoLogo && (
-                  <div className="mt-3 flex items-center gap-3 rounded-lg bg-slate-50 p-3">
-                    {previewLogo && (
-                      <img
-                        src={previewLogo}
-                        alt="Prévia do logo enviado"
-                        className="h-12 w-12 shrink-0 rounded border border-slate-200 bg-white object-contain"
-                      />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-slate-700">
-                        {arquivoLogo.name}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {(arquivoLogo.size / 1024).toFixed(0)} KB
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => aoEscolherLogo(null)}
-                      className="shrink-0 rounded-lg px-2 py-1 text-sm font-medium text-red-600 transition hover:bg-red-50"
-                    >
-                      Remover
-                    </button>
-                  </div>
-                )}
-              </Campo>
-
-              <Campo
-                label="Posição da estampa"
-                htmlFor="posicaoEstampa"
-                erro={errors.posicaoEstampa?.message}
-                dica="Opcional"
-              >
-                <input
-                  id="posicaoEstampa"
-                  type="text"
-                  list="posicoes-estampa"
-                  placeholder="Ex: Peito esquerdo"
-                  className={
-                    errors.posicaoEstampa
-                      ? `${classeInput} ${classeInputComErro}`
-                      : classeInput
-                  }
-                  {...register('posicaoEstampa')}
-                />
-                <datalist id="posicoes-estampa">
-                  {POSICOES_ESTAMPA.map((posicao) => (
-                    <option key={posicao} value={posicao} />
-                  ))}
-                </datalist>
-              </Campo>
-
               <Campo
                 label="Prazo desejado de entrega"
                 htmlFor="prazo"
                 erro={errors.prazo?.message}
-                dica="Opcional — a loja confirma se consegue atender"
+                dica={
+                  catalogo.prazoMinimoDias > 0
+                    ? `Opcional — a loja precisa de ${catalogo.prazoMinimoDias} dias para produzir`
+                    : 'Opcional'
+                }
               >
+                {/*
+                  O `min` já impede escolher data cedo demais no calendário. A
+                  regra também é conferida pelo zod e, de novo, pelo servidor —
+                  aqui é só conveniência.
+                */}
                 <input
                   id="prazo"
                   type="date"
-                  min={hoje}
+                  min={dataMinima}
                   className={
                     errors.prazo ? `${classeInput} ${classeInputComErro}` : classeInput
                   }
@@ -331,8 +440,7 @@ export function NovoPedido({ catalogo, onEnviado }: NovoPedidoProps) {
                 label="Observações"
                 htmlFor="observacoes"
                 erro={errors.observacoes?.message}
-                dica="Opcional — cores, detalhes, qualquer coisa importante"
-                className="sm:col-span-2"
+                dica="Opcional — detalhes, referências, qualquer coisa importante"
               >
                 <textarea
                   id="observacoes"

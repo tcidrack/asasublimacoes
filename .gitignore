@@ -33,3 +33,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+.vercel
+.env*
+# O exemplo precisa ficar versionado: e ele que documenta quais variaveis o
+# projeto espera. So os arquivos com valores reais e que ficam de fora.
+!.env.example

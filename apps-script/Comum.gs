@@ -10,14 +10,23 @@ const ABAS = {
   TECIDOS: 'Tecidos',
   TAMANHOS: 'Tamanhos',
   CORES: 'Cores',
+  POSICOES: 'Posições',
   PRECOS: 'Preços',
+  AGENDA: 'Agenda',
   PEDIDOS: 'Pedidos',
   ITENS: 'Itens',
+  ARTES: 'Artes',
   GRADE: 'Grade',
   ORDEM: 'Ordem de Produção',
 };
 
-/** Colunas da aba Pedidos (1 = coluna A). */
+/**
+ * Colunas da aba Pedidos (1 = coluna A).
+ *
+ * As antigas LOGO e POSICAO sairam: um pedido pode ter varias artes, cada uma
+ * com sua posicao, entao elas viraram a aba Artes. Aqui ficou so um resumo
+ * legivel, tipo "Peito esquerdo, Costas".
+ */
 const COL_PEDIDO = {
   NUMERO: 1,
   DATA: 2,
@@ -25,22 +34,33 @@ const COL_PEDIDO = {
   TELEFONE: 4,
   EMPRESA: 5,
   PRAZO: 6,
-  LOGO: 7,
-  POSICAO: 8,
-  OBSERVACOES: 9,
-  TOTAL: 10,
-  ENTRADA: 11,
-  SALDO: 12,
-  STATUS: 13,
-  ENTRADA_PAGA_EM: 14,
-  SALDO_PAGO_EM: 15,
+  ARTES: 7,
+  OBSERVACOES: 8,
+  TOTAL: 9,
+  ENTRADA: 10,
+  SALDO: 11,
+  STATUS: 12,
+  ENTRADA_PAGA_EM: 13,
+  SALDO_PAGO_EM: 14,
 };
 
 const CABECALHO_PEDIDOS = [
   'Nº', 'Data', 'Cliente', 'Telefone', 'Empresa', 'Prazo desejado',
-  'Logo', 'Posição da estampa', 'Observações',
+  'Artes', 'Observações',
   'Total', 'Entrada (50%)', 'Saldo a receber',
   'Status', 'Entrada paga em', 'Saldo pago em',
+];
+
+/** Colunas da aba Artes (1 = coluna A). Uma linha por arte do pedido. */
+const COL_ARTE = {
+  NUMERO_PEDIDO: 1,
+  POSICAO: 2,
+  ARQUIVO: 3,
+  OBSERVACAO: 4,
+};
+
+const CABECALHO_ARTES = [
+  'Nº do pedido', 'Posição', 'Arquivo', 'Observação',
 ];
 
 /** Colunas da aba Itens (1 = coluna A). */
@@ -278,13 +298,75 @@ function lerCatalogo() {
     .map(function (l) { return { nome: String(l[0]).trim(), ordem: Number(l[2]) || 0 }; })
     .sort(function (a, b) { return a.ordem - b.ordem; });
 
+  const posicoes = lerLinhas(aba(ABAS.POSICOES))
+    .filter(function (l) { return String(l[0]).trim() !== '' && l[1] === true; })
+    .map(function (l) { return { nome: String(l[0]).trim(), ordem: Number(l[2]) || 0 }; })
+    .sort(function (a, b) { return a.ordem - b.ordem; });
+
+  const agenda = lerAgenda();
+
   return {
     pecas: pecas,
     tecidos: tecidos,
     tamanhos: tamanhos,
     cores: cores,
+    posicoes: posicoes,
     precos: lerMatrizPrecos(),
+    prazoMinimoDias: agenda.prazoMinimoDias,
+    datasBloqueadas: agenda.datasBloqueadas,
   };
+}
+
+/**
+ * Le a aba Agenda: quanto tempo a loja precisa para produzir e quais periodos
+ * ela nao consegue atender.
+ *
+ * B1 guarda o prazo minimo em dias. Da linha 4 pra baixo ficam os bloqueios,
+ * em (de, ate, motivo).
+ */
+function lerAgenda() {
+  const sheet = aba(ABAS.AGENDA);
+
+  const prazo = Number(sheet.getRange('B1').getValue());
+  const prazoMinimoDias = isFinite(prazo) && prazo >= 0 ? Math.floor(prazo) : 0;
+
+  const ultimaLinha = sheet.getLastRow();
+  const datasBloqueadas = [];
+
+  if (ultimaLinha >= 4) {
+    const linhas = sheet.getRange(4, 1, ultimaLinha - 3, 3).getValues();
+    for (let i = 0; i < linhas.length; i++) {
+      const inicio = paraDataISO(linhas[i][0]);
+      if (!inicio) continue;
+      // Sem data final, o bloqueio vale so pelo dia de inicio.
+      const fim = paraDataISO(linhas[i][1]) || inicio;
+      datasBloqueadas.push({
+        inicio: inicio,
+        fim: fim,
+        motivo: String(linhas[i][2] || '').trim(),
+      });
+    }
+  }
+
+  return { prazoMinimoDias: prazoMinimoDias, datasBloqueadas: datasBloqueadas };
+}
+
+/** Data da planilha -> "aaaa-mm-dd". Devolve '' se a celula nao for data. */
+function paraDataISO(valor) {
+  if (!valor) return '';
+  if (Object.prototype.toString.call(valor) !== '[object Date]') return '';
+  if (isNaN(valor.getTime())) return '';
+  return Utilities.formatDate(valor, 'America/Sao_Paulo', 'yyyy-MM-dd');
+}
+
+/**
+ * Reduz o telefone aos digitos, para comparar.
+ *
+ * A planilha guarda "(85) 98405-8583" e o cliente pode consultar digitando
+ * "85984058583" ou "85 9 8405-8583". Sem normalizar, a consulta nunca acha.
+ */
+function somenteDigitos(valor) {
+  return String(valor === null || valor === undefined ? '' : valor).replace(/\D/g, '');
 }
 
 /**
