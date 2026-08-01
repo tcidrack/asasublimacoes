@@ -17,6 +17,7 @@ function onOpen() {
     .addItem('Marcar saldo como pago', 'marcarSaldoPago')
     .addSeparator()
     .addItem('Atualizar matriz de preços', 'atualizarMatrizDePrecos')
+    .addItem('Aplicar alterações do catálogo agora', 'aplicarAlteracoesDoCatalogo')
     .addToUi();
 }
 
@@ -472,6 +473,19 @@ function registrarPagamento(tipo) {
 // ---------------------------------------------------------------------------
 //  Manutencao
 // ---------------------------------------------------------------------------
+
+/**
+ * O catalogo fica guardado por 5 minutos para o site carregar rapido. Este
+ * item existe para quando o dono reajusta preco e quer efeito imediato, em
+ * vez de esperar a janela passar.
+ */
+function aplicarAlteracoesDoCatalogo() {
+  limparCacheDoCatalogo();
+  ui().alert(
+    'Pronto. As alterações de peças, tecidos, cores, tamanhos, posições, ' +
+    'preços e prazos já valem para os próximos pedidos.'
+  );
+}
 
 function atualizarMatrizDePrecos() {
   const adicionados = sincronizarMatrizPrecos();

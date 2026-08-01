@@ -224,11 +224,16 @@ function aba(nome) {
   return sheet;
 }
 
-/** Le uma aba inteira sem o cabecalho. Devolve [] se so houver cabecalho. */
+/**
+ * Le uma aba inteira sem o cabecalho. Devolve [] se so houver cabecalho.
+ *
+ * getDataRange() faz UMA ida ao Sheets. A versao anterior fazia tres --
+ * getLastRow, getLastColumn e getValues -- e como o catalogo percorre sete
+ * abas, isso sozinho passava de vinte chamadas com latencia cada.
+ */
 function lerLinhas(sheet) {
-  const ultimaLinha = sheet.getLastRow();
-  if (ultimaLinha < 2) return [];
-  return sheet.getRange(2, 1, ultimaLinha - 1, sheet.getLastColumn()).getValues();
+  const dados = sheet.getDataRange().getValues();
+  return dados.length < 2 ? [] : dados.slice(1);
 }
 
 /**
@@ -265,7 +270,65 @@ function formulaDoSaldo(linha) {
  * E a UNICA fonte de preco do sistema. O WebApp usa isso pra recalcular todo
  * pedido que chega, ignorando qualquer valor que o navegador tenha mandado.
  */
+const CHAVE_CACHE_CATALOGO = 'catalogo_v1';
+const CACHE_CATALOGO_SEGUNDOS = 300; // 5 minutos
+
+/** Limite por chave do CacheService. Acima disso o put() e ignorado. */
+const LIMITE_CACHE_BYTES = 100 * 1024;
+
+/**
+ * Catalogo com cache de 5 minutos.
+ *
+ * Ler as sete abas leva ~8 segundos, e isso era pago DUAS vezes por pedido:
+ * ao abrir a pagina e de novo no envio, para recalcular o preco. Com o cache,
+ * as duas coisas caem pro piso do Apps Script.
+ *
+ * O mesmo cache alimenta a exibicao e o calculo do que sera cobrado, entao o
+ * que o cliente ve e o que e gravado continuam vindo da mesma fonte.
+ *
+ * ATENCAO: o nonce NAO passa por aqui. Ele e de uso unico -- se entrasse no
+ * cache, todo cliente receberia o mesmo e o segundo envio falharia. Quem o
+ * adiciona e o doGet, depois desta funcao retornar.
+ */
 function lerCatalogo() {
+  const cache = CacheService.getScriptCache();
+
+  const guardado = cache.get(CHAVE_CACHE_CATALOGO);
+  if (guardado) {
+    try {
+      return JSON.parse(guardado);
+    } catch (erro) {
+      // Cache corrompido nao pode derrubar o pedido: segue pra planilha.
+    }
+  }
+
+  const catalogo = lerCatalogoDaPlanilha();
+
+  try {
+    const serializado = JSON.stringify(catalogo);
+    if (serializado.length < LIMITE_CACHE_BYTES) {
+      cache.put(CHAVE_CACHE_CATALOGO, serializado, CACHE_CATALOGO_SEGUNDOS);
+    }
+  } catch (erro) {
+    // Sem cache o sistema so fica mais lento, nunca quebrado.
+  }
+
+  return catalogo;
+}
+
+/**
+ * Apaga o cache para que uma alteracao de preco valha na hora.
+ * Chamado pelo menu e por tudo que mexe no catalogo.
+ */
+function limparCacheDoCatalogo() {
+  try {
+    CacheService.getScriptCache().remove(CHAVE_CACHE_CATALOGO);
+  } catch (erro) {
+    // Nada a fazer: o cache expira sozinho em 5 minutos.
+  }
+}
+
+function lerCatalogoDaPlanilha() {
   const pecas = lerLinhas(aba(ABAS.PECAS))
     .filter(function (l) { return String(l[0]).trim() !== '' && l[1] === true; })
     .map(function (l) { return { nome: String(l[0]).trim(), ordem: Number(l[2]) || 0 }; })
@@ -374,12 +437,9 @@ function somenteDigitos(valor) {
  * em centavos. Celula vazia significa "essa combinacao nao e oferecida".
  */
 function lerMatrizPrecos() {
-  const sheet = aba(ABAS.PRECOS);
-  const ultimaLinha = sheet.getLastRow();
-  const ultimaColuna = sheet.getLastColumn();
-  if (ultimaLinha < 2 || ultimaColuna < 2) return {};
+  const valores = aba(ABAS.PRECOS).getDataRange().getValues();
+  if (valores.length < 2 || valores[0].length < 2) return {};
 
-  const valores = sheet.getRange(1, 1, ultimaLinha, ultimaColuna).getValues();
   const nomesTecidos = valores[0].slice(1).map(function (v) { return String(v).trim(); });
 
   const matriz = {};

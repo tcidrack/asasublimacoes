@@ -48,6 +48,10 @@ function configurarPlanilha() {
 
   ss.setActiveSheet(ss.getSheetByName(ABAS.PEDIDOS));
 
+  // O catalogo mudou: o cache antigo entregaria abas que acabaram de ser
+  // recriadas.
+  limparCacheDoCatalogo();
+
   // Toast, e nao ui().alert().
   //
   // Rodando pelo editor do Apps Script, um alert() abre o modal na ABA DA
@@ -420,6 +424,7 @@ function sincronizarMatrizPrecos() {
   });
 
   configurarAbaPrecos();
+  limparCacheDoCatalogo();
   return adicionados;
 }
 

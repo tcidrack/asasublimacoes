@@ -41,8 +41,8 @@ function campo(id: string, valor: string): string {
 /**
  * Tira acento, deixa maiúsculo e corta no limite.
  *
- * Acento no payload faz app de banco recusar o código, então "Asa Sublimações"
- * precisa virar "ASA SUBLIMACOES".
+ * Acento no payload faz app de banco recusar o código, então um nome como
+ * "Confecções Silva" precisa virar "CONFECCOES SILVA".
  */
 function textoLimpo(valor: string, tamanhoMaximo: number): string {
   return valor

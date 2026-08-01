@@ -6,8 +6,8 @@ import { NovoPedido } from './pages/NovoPedido'
 import { PedidoEnviado } from './pages/PedidoEnviado'
 import type { RespostaPedido } from './types'
 
-const NOME_LOJA = 'Asa Sublimações'
-const LOGO = '/logo-asasublima.png'
+const NOME_LOJA = 'Cidrack Company'
+const LOGO = '/logo-c.jpg'
 export const ROTA_CONSULTA = '/acompanhar'
 
 /**

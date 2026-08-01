@@ -7,7 +7,7 @@ import { LinhaItem } from '../components/LinhaItem'
 import type { ErrosLinha } from '../components/LinhaItem'
 import { LinhaArte } from '../components/LinhaArte'
 import { ResumoValores } from '../components/ResumoValores'
-import { enviarPedido, lerArquivoComoBase64 } from '../lib/api'
+import { buscarCatalogo, enviarPedido, lerArquivoComoBase64 } from '../lib/api'
 import { calcularTotais } from '../lib/pricing'
 import { formatarTelefone } from '../lib/format'
 import { primeiraDataPossivel } from '../lib/prazo'
@@ -124,6 +124,14 @@ export function NovoPedido({ catalogo, onEnviado }: NovoPedidoProps) {
     ? artes.filter((a) => a.posicao && !a.arquivo).length
     : 0
 
+  // Cada arte sobe para o Drive separadamente e leva alguns segundos. Dizer
+  // isso evita a sensação de que o botão travou.
+  const comArquivo = artes.filter((a) => a.arquivo).length
+  const textoDoBotao =
+    comArquivo > 0
+      ? `Enviando ${comArquivo === 1 ? 'a arte' : `as ${comArquivo} artes`}…`
+      : 'Enviando…'
+
   function mudarArte(id: string, mudancas: Partial<ArteLocal>) {
     setArtes((atuais) =>
       atuais.map((a) => (a.id === id ? { ...a, ...mudancas } : a)),
@@ -154,6 +162,11 @@ export function NovoPedido({ catalogo, onEnviado }: NovoPedidoProps) {
     setEnviando(true)
 
     try {
+      // O catálogo pode ter vindo da cópia local, que não guarda o nonce --
+      // ele é de uso único. Buscar um válido agora evita o envio falhar com
+      // "sessão expirada" logo depois de o cliente preencher tudo.
+      const nonce = catalogo.nonce || (await buscarCatalogo()).nonce
+
       const artesEnviadas: ArteEnviada[] = []
       for (const arte of artes) {
         if (!arte.arquivo) continue
@@ -179,7 +192,7 @@ export function NovoPedido({ catalogo, onEnviado }: NovoPedidoProps) {
         prazo: valores.prazo || undefined,
         observacoes: valores.observacoes.trim() || undefined,
         artes: artesEnviadas,
-        nonce: catalogo.nonce,
+        nonce,
         website: valores.website,
         itens: valores.itens.map((linha) => ({
           peca: linha.peca,
@@ -481,7 +494,7 @@ export function NovoPedido({ catalogo, onEnviado }: NovoPedidoProps) {
               disabled={enviando}
               className="w-full rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
             >
-              {enviando ? 'Enviando…' : 'Enviar pedido'}
+              {enviando ? textoDoBotao : 'Enviar pedido'}
             </button>
           </div>
         </aside>
@@ -495,7 +508,7 @@ export function NovoPedido({ catalogo, onEnviado }: NovoPedidoProps) {
           disabled={enviando}
           className="mt-3 w-full rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
         >
-          {enviando ? 'Enviando…' : 'Enviar pedido'}
+          {enviando ? textoDoBotao : 'Enviar pedido'}
         </button>
       </div>
     </form>
